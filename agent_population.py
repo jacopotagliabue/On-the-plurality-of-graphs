@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
+import math
 import os
 import random
 from tqdm import tqdm
@@ -48,7 +49,8 @@ class Population(object):
         self.init_agents()
         
         # TODO: pass in appropriate network params         
-        self.init_network()  # construct networkx network of type `network_type`
+        self.init_network(network_type=self.network_type,
+                          n_nodes=population_size)  # construct networkx network of type `network_type`
 
 
         # collect edges from the graph and order according to some ordering algorithm
@@ -61,21 +63,56 @@ class Population(object):
         self.device = "cuda:0"
 
         self.summarize()
+
+    def solve_poly(self, a, b, c):
+        # ax**2 + bx + c = 0
+        d = (b ** 2) - (4 * a * c)
+        # return two solutions
+        return (-b - math.sqrt(d)) / (2 * a), (-b + math.sqrt(d)) / (2 * a)
+
+    def compute_barabasi_params(self, n_nodes, n_edges, verbose=False):
+        solutions = self.solve_poly(1, n_nodes * -1.0, n_edges)
+        m = int(min(solutions))
+        if verbose:
+            print(m, n_edges, solutions)
+        return [n_nodes, m]
+
+    def compute_erdos_params(self, n_nodes, n_edges):
+        return [n_nodes, n_edges / ((n_nodes * n_nodes) / 2)]
+
+    def compute_watts_params(self, n_nodes, n_edges, rewriting_prob=0.15):
+        return [n_nodes, int((n_edges * 2) / n_nodes), rewriting_prob]
+
+    def compute_network_params(self, network_type, n_nodes, n_edges):
+        if network_type == "erdos":
+            return self.compute_erdos_params(n_nodes, n_edges)
+        elif network_type == "barabasi":
+            return self.compute_barabasi_params(n_nodes, n_edges)
+        elif network_type == "watts":
+            return self.compute_watts_params(n_nodes, n_edges)
+
+        return None
     
-    def init_network(self):
+    def init_network(self, network_type, n_nodes, verbose=False):
         """
         construct networkx graphs
         """
-        if self.network_type == "erdos":
-            self.network = nx.erdos_renyi_graph()
-        elif self.network_type == "barabasi":
-            self.network = nx.barabasi_albert_graph()
-        elif self.network_type == "watts":
-            self.network = nx.connected_watts_strogatz_graph()
+        # TODO: should we pass n_edges in the constructor?
+        n_edges = 100
+        # get network settings
+        network_settings = self.compute_network_params(network_type,
+                                                       n_nodes,
+                                                       n_edges)
+        if network_type == "erdos":
+            self.network = nx.erdos_renyi_graph(*network_settings)
+        elif network_type == "barabasi":
+            self.network = nx.barabasi_albert_graph(*network_settings)
+        elif network_type == "watts":
+            self.network = nx.connected_watts_strogatz_graph(*network_settings)
         
         else:  # construct random pairs
             s, r = [], []
-            for i in range(self.population_size):
+            for i in range(n_nodes):
                 for j in range(self.n_pairs):
                     s.append(i)
                     r.append(i)
@@ -85,10 +122,16 @@ class Population(object):
             edges = list(zip(s, r))
 
             g = nx.MultiDiGraph()
-            g.add_nodes_from(range(self.population_size))
+            g.add_nodes_from(range(n_nodes))
             g.add_edges_from(edges)
             
             self.network = g
+
+        if verbose:
+            print("Generated network '{}' with {} nodes and {} edges".format(
+                network_type, self.network.number_of_nodes(), self.network.number_of_edges()))
+
+        return
     
     def compute_pairs(self):
         """
